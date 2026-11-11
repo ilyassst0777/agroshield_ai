@@ -4,7 +4,9 @@ import 'leaflet/dist/leaflet.css'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer,
 } from 'recharts'
-import { fetchClimate } from './nasa'
+import { fetchClimate } from './nasa.js'
+import Recommendations from './Recommendations.jsx'
+import Automation from './Automation.jsx'
 
 const BASE_START = 1991
 const BASE_END = 2020
@@ -171,6 +173,14 @@ export default function App() {
           ) : (
             <p>Not enough data to compute the anomaly.</p>
           )}
+
+          <Recommendations an={an} />
+
+          <Automation
+            an={an}
+            fieldKey={`${lat},${lon}`}
+            source={`NASA POWER, retrieved ${data.retrievedAt}`}
+          />
 
           <small>
             Source: {data.source}. Retrieved: {data.retrievedAt}
