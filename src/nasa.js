@@ -1,7 +1,7 @@
 const BASE = 'https://power.larc.nasa.gov/api/temporal/monthly/point'
 
 // Месячные данные NASA POWER: температура (T2M, °C) и осадки (PRECTOTCORR, мм/день)
-export async function fetchClimate(lat, lon, startYear = 1991, endYear = 2024) {
+export async function fetchClimate(lat, lon, startYear = 1991, endYear = 2025) {
   const url =
     `${BASE}?start=${startYear}&end=${endYear}` +
     `&latitude=${lat}&longitude=${lon}` +

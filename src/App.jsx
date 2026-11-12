@@ -7,10 +7,12 @@ import {
 import { fetchClimate } from './nasa.js'
 import Recommendations from './Recommendations.jsx'
 import Automation from './Automation.jsx'
+import Stats from './Stats.jsx'
 
 const BASE_START = 1991
 const BASE_END = 2020
 const SEASON_DAYS = 123 // май-август: 31 + 30 + 31 + 31
+const TABS = ['Dashboard', 'Climate', 'Agronomy', 'Automation']
 
 function ClickHandler({ onPick }) {
   useMapEvents({
@@ -60,7 +62,19 @@ function anomaly(summary) {
   }
 }
 
+function NoData() {
+  return (
+    <div className="card">
+      <p>
+        Load NASA data first: open the Dashboard tab, choose your field and press
+        "Load NASA POWER data".
+      </p>
+    </div>
+  )
+}
+
 export default function App() {
+  const [tab, setTab] = useState('Dashboard')
   const [lat, setLat] = useState('')
   const [lon, setLon] = useState('')
   const [data, setData] = useState(null)
@@ -95,7 +109,7 @@ export default function App() {
     setLoading(true)
     setError('')
     try {
-      const d = await fetchClimate(Number(lat).toFixed(4), Number(lon).toFixed(4))
+      const d = await fetchClimate(Number(lat).toFixed(4), Number(lon).toFixed(4), 1991, 2026)
       setData(d)
     } catch (e) {
       setError(e.message)
@@ -107,86 +121,129 @@ export default function App() {
   const an = data ? anomaly(summary) : null
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: 16, fontFamily: 'sans-serif' }}>
-      <h1>AgroShield AI</h1>
-      <p>Click the map or enter GPS coordinates of your field, then load NASA climate data.</p>
+    <div className="app">
+      <header className="header">
+        <h1>AgroShield AI</h1>
+        <p>Climate-based crop rotation decision support using NASA POWER data</p>
+      </header>
 
-      <MapContainer center={[54.87, 69.15]} zoom={6} style={{ height: 380 }}>
-        <TileLayer
-          attribution="&copy; OpenStreetMap contributors"
-          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        <ClickHandler onPick={pick} />
-        {valid && <CircleMarker center={[Number(lat), Number(lon)]} radius={8} />}
-      </MapContainer>
+      <nav className="tabs">
+        {TABS.map((t) => (
+          <button key={t} className={t === tab ? 'active' : ''} onClick={() => setTab(t)}>
+            {t}
+          </button>
+        ))}
+      </nav>
 
-      <div style={{ margin: '12px 0' }}>
-        <label>
-          Latitude{' '}
-          <input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="54.8700" style={{ width: 110 }} />
-        </label>{' '}
-        <label>
-          Longitude{' '}
-          <input value={lon} onChange={(e) => setLon(e.target.value)} placeholder="69.1500" style={{ width: 110 }} />
-        </label>{' '}
-        <button onClick={useMyLocation}>Use my location</button>
-      </div>
+      {tab === 'Dashboard' && (
+        <>
+          <div className="card">
+            <h2>1. Choose your field</h2>
+            <p className="muted">Click the map or enter GPS coordinates, then load NASA climate data.</p>
 
-      <button onClick={load} disabled={!valid || loading}>
-        {loading ? 'Loading...' : 'Load NASA POWER data'}
-      </button>
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+            <MapContainer center={[54.87, 69.15]} zoom={6} style={{ height: 340 }}>
+              <TileLayer
+                attribution="&copy; OpenStreetMap contributors"
+                url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              <ClickHandler onPick={pick} />
+              {valid && <CircleMarker center={[Number(lat), Number(lon)]} radius={8} />}
+            </MapContainer>
 
-      {data && (
-        <div>
-          <h3>May-August averages by year (assumed growing season)</h3>
-          <ResponsiveContainer width="100%" height={320}>
-            <LineChart data={summary}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="year" />
-              <YAxis yAxisId="left" />
-              <YAxis yAxisId="right" orientation="right" />
-              <Tooltip />
-              <Legend />
-              <Line yAxisId="left" type="monotone" dataKey="temp" name="Temperature (°C)" stroke="#d9480f" dot={false} />
-              <Line yAxisId="right" type="monotone" dataKey="precip" name="Precipitation (mm/day)" stroke="#1971c2" dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-
-          {an ? (
-            <div style={{ background: '#f1f3f5', padding: 12, borderRadius: 6, marginTop: 12 }}>
-              <b>Season {an.year} vs normal ({BASE_START}-{BASE_END}, {an.baseYears} years)</b>
-              <p>
-                Precipitation: {an.precip} mm/day (about {(an.precip * SEASON_DAYS).toFixed(0)} mm over the season)
-                vs normal {an.meanPrecip} mm/day:{' '}
-                <b>{an.precipPct > 0 ? '+' : ''}{an.precipPct}%</b>
-              </p>
-              <p>
-                Temperature: {an.temp} °C vs normal {an.meanTemp} °C:{' '}
-                <b>{an.tempDiff > 0 ? '+' : ''}{an.tempDiff} °C</b>
-              </p>
-              <small>
-                Simple anomaly = (season value - mean of baseline years) / mean. This describes the
-                climate of the NASA grid cell around your point, not your exact field.
-              </small>
+            <div className="row">
+              <label>
+                Latitude{' '}
+                <input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="54.8700" style={{ width: 110 }} />
+              </label>
+              <label>
+                Longitude{' '}
+                <input value={lon} onChange={(e) => setLon(e.target.value)} placeholder="69.1500" style={{ width: 110 }} />
+              </label>
+              <button onClick={useMyLocation}>Use my location</button>
+              <button onClick={load} disabled={!valid || loading}>
+                {loading ? 'Loading...' : 'Load NASA POWER data'}
+              </button>
             </div>
-          ) : (
-            <p>Not enough data to compute the anomaly.</p>
+            {error && <p className="error">{error}</p>}
+          </div>
+
+          {data && an && <Stats an={an} data={data} />}
+          {data && !an && (
+            <div className="card">
+              <p>Not enough complete years to compute the anomaly.</p>
+            </div>
           )}
+        </>
+      )}
 
-          <Recommendations an={an} />
+      {tab === 'Climate' &&
+        (data ? (
+          <div className="card">
+            <h2>Climate intelligence</h2>
+            <h3>May-August averages by year (assumed growing season)</h3>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={summary}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="year" />
+                <YAxis yAxisId="left" />
+                <YAxis yAxisId="right" orientation="right" />
+                <Tooltip />
+                <Legend />
+                <Line yAxisId="left" type="monotone" dataKey="temp" name="Temperature (°C)" stroke="#d9480f" dot={false} />
+                <Line yAxisId="right" type="monotone" dataKey="precip" name="Precipitation (mm/day)" stroke="#1971c2" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
 
+            {an ? (
+              <div style={{ background: '#f1f3f5', padding: 12, borderRadius: 8, marginTop: 12 }}>
+                <b>Season {an.year} vs normal ({BASE_START}-{BASE_END}, {an.baseYears} years)</b>
+                <p>
+                  Precipitation: {an.precip} mm/day (about {(an.precip * SEASON_DAYS).toFixed(0)} mm over the season)
+                  vs normal {an.meanPrecip} mm/day:{' '}
+                  <b>{an.precipPct > 0 ? '+' : ''}{an.precipPct}%</b>
+                </p>
+                <p>
+                  Temperature: {an.temp} °C vs normal {an.meanTemp} °C:{' '}
+                  <b>{an.tempDiff > 0 ? '+' : ''}{an.tempDiff} °C</b>
+                </p>
+                <small>
+                  Simple anomaly = (season value - mean of baseline years) / mean. This describes the
+                  climate of the NASA grid cell around your point, not your exact field.
+                </small>
+              </div>
+            ) : (
+              <p>Not enough data to compute the anomaly.</p>
+            )}
+            <p className="muted">
+              Source: {data.source}. Retrieved: {data.retrievedAt}
+            </p>
+          </div>
+        ) : (
+          <NoData />
+        ))}
+
+      {tab === 'Agronomy' &&
+        (data ? (
+          <div className="card">
+            <Recommendations an={an} />
+          </div>
+        ) : (
+          <NoData />
+        ))}
+
+      {tab === 'Automation' && (
+        <div className="card">
           <Automation
             an={an}
             fieldKey={`${lat},${lon}`}
-            source={`NASA POWER, retrieved ${data.retrievedAt}`}
+            source={data ? `NASA POWER, retrieved ${data.retrievedAt}` : ''}
           />
-
-          <small>
-            Source: {data.source}. Retrieved: {data.retrievedAt}
-          </small>
         </div>
       )}
+
+      <div className="footer">
+        AgroShield AI is a decision-support prototype, not a yield forecast. Data: NASA POWER.
+      </div>
     </div>
   )
 }
