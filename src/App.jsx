@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { MapContainer, TileLayer, CircleMarker, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import {
@@ -7,6 +7,7 @@ import {
 import { fetchClimate } from './nasa.js'
 import Recommendations from './Recommendations.jsx'
 import Automation from './Automation.jsx'
+import RiskProfile from './RiskProfile.jsx'
 
 const BASE_START = 1991
 const BASE_END = 2020
@@ -70,6 +71,14 @@ function readLS(key, fallback) {
   }
 }
 
+function writeLS(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* storage can be unavailable */
+  }
+}
+
 const signed = (n) => (n > 0 ? '+' + n : String(n))
 
 function SeasonStats({ an, data }) {
@@ -85,7 +94,7 @@ function SeasonStats({ an, data }) {
   const activeRules = rules ? rules.filter((r) => r.enabled).length : 2
   const totalRules = rules ? rules.length : 2
   const pending = tasks.filter((t) => t.status === 'pending').length
-  const testChecks = log.filter((l) => l.result.includes('[TEST scenario]')).length
+  const testChecks = log.filter((l) => l.test === true || l.result.includes('[TEST scenario]')).length
   const realChecks = log.length - testChecks
 
   const dry = an.precipPct <= dryThreshold
@@ -150,11 +159,15 @@ function NoData() {
 
 export default function App() {
   const [tab, setTab] = useState('Dashboard')
-  const [lat, setLat] = useState('')
-  const [lon, setLon] = useState('')
-  const [data, setData] = useState(null)
+  const [lat, setLat] = useState(() => readLS('agro_lat', ''))
+  const [lon, setLon] = useState(() => readLS('agro_lon', ''))
+  const [data, setData] = useState(() => readLS('agro_data', null))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => { writeLS('agro_lat', lat) }, [lat])
+  useEffect(() => { writeLS('agro_lon', lon) }, [lon])
+  useEffect(() => { if (data) writeLS('agro_data', data) }, [data])
 
   const valid =
     lat !== '' &&
@@ -240,6 +253,12 @@ export default function App() {
               </button>
             </div>
             {error && <p className="error">{error}</p>}
+            {data && (
+              <p className="muted">
+                Saved data in this browser was loaded at {new Date(data.retrievedAt).toLocaleString()}.
+                Press "Load NASA POWER data" to refresh it.
+              </p>
+            )}
           </div>
 
           {data && an && <SeasonStats an={an} data={data} />}
@@ -289,6 +308,9 @@ export default function App() {
             ) : (
               <p>Not enough data to compute the anomaly.</p>
             )}
+
+            <RiskProfile summary={summary} />
+
             <p className="muted">
               Source: {data.source}. Retrieved: {data.retrievedAt}
             </p>
