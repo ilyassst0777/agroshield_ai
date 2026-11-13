@@ -1,135 +1,131 @@
-import { useEffect, useState } from 'react'
-import { DEFAULT_RULES, METRICS, runRules } from './automationEngine.js'
+import { useT } from './i18n.jsx'
+import { fmtTime, opSym, ruleLine, signed } from './ui.jsx'
 
-function load(key, fallback) {
-  try {
-    const v = localStorage.getItem(key)
-    return v ? JSON.parse(v) : fallback
-  } catch {
-    return fallback
-  }
-}
+export default function Automation({ rules, setRules, an, hasData, executions, onRun, onClear }) {
+  const { t, lang } = useT()
 
-function save(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value))
-  } catch {
-    /* storage can be unavailable */
-  }
-}
+  const updateRule = (id, patch) => setRules(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)))
 
-export default function Automation({ an, fieldKey, source }) {
-  const [rules, setRules] = useState(() => load('agro_rules', DEFAULT_RULES))
-  const [tasks, setTasks] = useState(() => load('agro_tasks', []))
-  const [notes, setNotes] = useState(() => load('agro_notes', []))
-  const [log, setLog] = useState(() => load('agro_log', []))
-  const [test, setTest] = useState(false)
-
-  useEffect(() => { save('agro_rules', rules) }, [rules])
-  useEffect(() => { save('agro_tasks', tasks) }, [tasks])
-  useEffect(() => { save('agro_notes', notes) }, [notes])
-  useEffect(() => { save('agro_log', log) }, [log])
-
-  const updateRule = (id, patch) =>
-    setRules(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)))
-
-  const setStatus = (id, status) =>
-    setTasks(tasks.map((t) => (t.id === id ? { ...t, status } : t)))
-
-  const run = () => {
-    if (!an) return
-    const res = runRules({
-      rules,
-      anomaly: an,
-      fieldKey,
-      source,
-      test,
-      existingKeys: tasks.map((t) => t.key),
-    })
-    setTasks([...res.tasks, ...tasks])
-    setNotes([...res.notifications, ...notes])
-    setLog([...res.log, ...log].slice(0, 100))
-  }
-
-  const reset = () => {
-    setTasks([])
-    setNotes([])
-    setLog([])
-  }
+  const okRuns = executions.filter((e) => e.status !== 'failed')
+  const realRuns = okRuns.filter((e) => !e.test).length
+  const testRuns = okRuns.filter((e) => e.test).length
 
   return (
-    <div style={{ marginTop: 24 }}>
-      <h2>Automation</h2>
+    <div className="card">
+      <h2>{t('auto.title')}</h2>
 
-      <div style={{ background: '#f8f9fa', padding: 12, borderRadius: 6 }}>
-        <b>Rules (IF condition THEN create task and notification)</b>
-        {rules.map((r) => (
-          <div key={r.id} style={{ marginTop: 6 }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={r.enabled}
-                onChange={(e) => updateRule(r.id, { enabled: e.target.checked })}
-              />{' '}
-              <b>{r.name}</b>: if {METRICS[r.metric].label} {r.op}{' '}
-            </label>
-            <input
-              type="number"
-              value={r.threshold}
-              onChange={(e) => updateRule(r.id, { threshold: e.target.value })}
-              style={{ width: 70 }}
-            />{' '}
-            <small>(threshold is our assumption)</small>
-          </div>
-        ))}
-
-        <div style={{ marginTop: 10 }}>
-          <button onClick={run} disabled={!an}>Run automation now</button>{' '}
-          <label>
-            <input type="checkbox" checked={test} onChange={(e) => setTest(e.target.checked)} />{' '}
-            Run as TEST scenario (simulated dry and hot season, not real data)
-          </label>{' '}
-          <button onClick={reset}>Clear history</button>
+      <div className="grid">
+        <div className="stat">
+          <div className="label">{t('auto.active')}</div>
+          <div className="value">{rules.filter((r) => r.enabled).length} / {rules.length}</div>
         </div>
-        {!an && <p>Load NASA data first.</p>}
+        <div className="stat">
+          <div className="label">{t('auto.checks')}</div>
+          <div className="value">{realRuns} / {testRuns}</div>
+        </div>
+        <div className="stat">
+          <div className="label">{t('auto.data')}</div>
+          <div className="value small">{hasData && an ? t('auto.dataLoaded', { year: an.year }) : t('auto.dataNone')}</div>
+        </div>
       </div>
+      <p className="muted">{t('auto.intro')}</p>
 
-      <h3>Tasks</h3>
-      {tasks.length === 0 && <p>No tasks yet.</p>}
-      {tasks.map((t) => (
-        <div key={t.id} style={{ border: '1px solid #ccc', borderRadius: 6, padding: 10, marginBottom: 8 }}>
-          <b>{t.test ? '[TEST] ' : ''}{t.title}</b> ({t.status})
-          <div>{t.text}</div>
-          <small>Created by rule "{t.ruleName}" at {t.createdAt}</small>
-          {t.status === 'pending' && (
-            <div style={{ marginTop: 6 }}>
-              <button onClick={() => setStatus(t.id, 'approved')}>Approve</button>{' '}
-              <button onClick={() => setStatus(t.id, 'rejected')}>Reject</button>
+      <h3>{t('auto.rules')}</h3>
+      {rules.map((r) => {
+        const lastExec = executions.find((e) => e.ruleResults.some((x) => x.ruleId === r.id))
+        const lastRes = lastExec ? lastExec.ruleResults.find((x) => x.ruleId === r.id) : null
+        return (
+          <div key={r.id} className="rule-card">
+            <div className="row" style={{ margin: 0 }}>
+              <b>{t('rule.' + r.id + '.name')}</b>
+              <span className={r.enabled ? 'badge ok' : 'badge warn'}>
+                {r.enabled ? t('auto.enabled') : t('auto.disabled')}
+              </span>
+              <label>
+                <input type="checkbox" checked={r.enabled} onChange={(e) => updateRule(r.id, { enabled: e.target.checked })} />{' '}
+                {t('auto.enable')}
+              </label>
             </div>
-          )}
-        </div>
-      ))}
-      <small>
-        Approving only marks the task as accepted by the farmer. The app never changes planting
-        decisions or controls equipment.
-      </small>
+            <div className="muted">{t('rule.' + r.id + '.desc')}</div>
+            <div>{t('auto.trigger')}</div>
+            <div>
+              <b>{t('auto.condition')}:</b> {t('metric.' + r.metric)} {opSym(r.op)}{' '}
+              <input
+                type="number"
+                step="0.1"
+                value={r.threshold}
+                onChange={(e) => updateRule(r.id, { threshold: e.target.value })}
+                style={{ width: 80 }}
+              />{' '}
+              <small className="muted">{t('auto.assumption')}</small>
+            </div>
+            <div>{t('auto.action')}</div>
+            <div className="muted">
+              <b>{t('auto.last')}:</b>{' '}
+              {lastExec && lastRes ? `${fmtTime(lastExec.at, lang)} ${lastExec.test ? '[' + t('common.test') + '] ' : ''}— ${ruleLine(t, lastRes)}` : t('auto.never')}
+            </div>
+          </div>
+        )
+      })}
 
-      <h3>Notifications</h3>
-      {notes.length === 0 && <p>No notifications yet.</p>}
-      {notes.map((n) => (
-        <div key={n.id} style={{ borderLeft: '4px solid #1971c2', padding: '4px 10px', marginBottom: 8 }}>
-          <b>{n.test ? '[TEST] ' : ''}{n.message}</b>
-          <div><small>Field: {n.field} | Data: {n.source} | {n.createdAt}</small></div>
-          <div><small>Next step: {n.nextStep}</small></div>
-        </div>
-      ))}
+      <div className="row">
+        <button onClick={() => onRun(false)} disabled={!an}>{t('auto.runReal')}</button>
+        <button className="secondary" onClick={() => onRun(true)}>{t('auto.runTest')}</button>
+        <button className="danger" onClick={onClear}>{t('auto.clear')}</button>
+      </div>
+      <small className="muted">{t('auto.testNote')}</small>
 
-      <h3>Execution history</h3>
-      {log.length === 0 && <p>Nothing has run yet.</p>}
-      {log.map((l, i) => (
-        <div key={i}>
-          <small>{l.at} | {l.rule} | {l.result}</small>
-        </div>
+      <h3>{t('auto.history')}</h3>
+      {executions.length === 0 && <p className="muted">{t('auto.noHistory')}</p>}
+      {executions.map((e) => (
+        <details key={e.id} className="exec">
+          <summary>
+            <span className={e.test ? 'badge warn' : 'badge ok'}>{e.test ? t('common.test') : t('common.real')}</span>{' '}
+            <b>{t('hist.status.' + e.status)}</b>{' '}
+            <small className="muted">{fmtTime(e.at, lang)} | {e.id}</small>
+          </summary>
+          <div className="exec-body">
+            {e.status === 'failed' ? (
+              <div className="error">{t('hist.error', { msg: e.error })}</div>
+            ) : (
+              <>
+                <div>
+                  <b>{t('auto.inputs')}:</b>{' '}
+                  {t('auto.inputsLine', { year: e.inputs.year, p: signed(e.inputs.precipPct), tt: signed(e.inputs.tempDiff) })}
+                  {e.test && <> <span className="badge warn">{t('auto.simulated')}</span></>}
+                </div>
+                {e.ruleResults.map((rr) => (
+                  <div key={rr.ruleId}>• {ruleLine(t, rr)}</div>
+                ))}
+                <div>
+                  <b>{t('auto.ranking')}</b>
+                </div>
+                <div>
+                  {t('auto.before')}: {e.ranking.before.map((x) => `#${x.position} ${t('rot.' + x.id)} (${x.score})`).join('; ')}
+                </div>
+                <div>
+                  {t('auto.after')}: {e.ranking.after.map((x) => `#${x.position} ${t('rot.' + x.id)} (${x.score})`).join('; ')}
+                </div>
+                <div>
+                  <b>{t('auto.changes')}:</b>{' '}
+                  {e.ranking.changes.length
+                    ? e.ranking.changes.map((c) => t('task.change', { name: t('rot.' + c.id), from: c.from, to: c.to })).join('; ')
+                    : t('auto.noChanges')}
+                </div>
+                <div>{t('hist.tasks', { n: e.taskIds.length })}</div>
+                <div className="muted">
+                  {t('auto.assump', {
+                    w: `${e.assumptions.weights.moisture}/${e.assumptions.weights.soil}/${e.assumptions.weights.quality}`,
+                    nt: e.assumptions.noTill ? t('tillage.yes') : t('tillage.no'),
+                    adj: Object.keys(e.assumptions.adjustments).length
+                      ? Object.entries(e.assumptions.adjustments).map(([k, v]) => `${t('criteria.' + k)} +${v}`).join(', ')
+                      : t('auto.adjNone'),
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </details>
       ))}
     </div>
   )

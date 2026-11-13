@@ -1,65 +1,36 @@
-import { useState, useEffect } from 'react'
-import { MapContainer, TileLayer, CircleMarker, useMapEvents } from 'react-leaflet'
-import 'leaflet/dist/leaflet.css'
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer,
-} from 'recharts'
+import { useState, useEffect, useRef } from 'react'
+import { LangProvider, useT } from './i18n.jsx'
 import { fetchClimate } from './nasa.js'
-import Recommendations from './Recommendations.jsx'
+import { seasonSummary, anomaly, dataCheck, REQUEST_END_YEAR } from './climate.js'
+import { DEFAULT_WEIGHTS, currentAnalysis } from './scoring.js'
+import { DEFAULT_RULES, runAutomation } from './automationEngine.js'
+import Dashboard from './Dashboard.jsx'
+import FieldProfile from './FieldProfile.jsx'
+import Climate from './Climate.jsx'
+import Agronomy from './Agronomy.jsx'
 import Automation from './Automation.jsx'
-import RiskProfile from './RiskProfile.jsx'
+import TasksNotifications from './TasksNotifications.jsx'
 
-const BASE_START = 1991
-const BASE_END = 2020
-const SEASON_DAYS = 123 // май-август: 31 + 30 + 31 + 31
-const TABS = ['Dashboard', 'Climate', 'Agronomy', 'Automation']
-
-function ClickHandler({ onPick }) {
-  useMapEvents({
-    click(e) {
-      onPick(e.latlng.lat, e.latlng.lng)
-    },
-  })
-  return null
-}
-
-// Средние температура и осадки за май-август по годам (только полные годы)
-function seasonSummary(rows) {
-  const years = {}
-  for (const r of rows) {
-    if (r.month < 5 || r.month > 8) continue
-    if (r.temp === null || r.precip === null) continue
-    if (!years[r.year]) years[r.year] = { t: 0, p: 0, n: 0 }
-    years[r.year].t += r.temp
-    years[r.year].p += r.precip
-    years[r.year].n += 1
-  }
-  return Object.entries(years)
-    .filter(([, v]) => v.n === 4)
-    .map(([year, v]) => ({
-      year: Number(year),
-      temp: +(v.t / v.n).toFixed(2),
-      precip: +(v.p / v.n).toFixed(2),
-    }))
-}
-
-// Отклонение последнего сезона от нормы за базовый период
-function anomaly(summary) {
-  const base = summary.filter((s) => s.year >= BASE_START && s.year <= BASE_END)
-  if (base.length < 25 || summary.length === 0) return null
-  const meanP = base.reduce((a, s) => a + s.precip, 0) / base.length
-  const meanT = base.reduce((a, s) => a + s.temp, 0) / base.length
-  const last = summary[summary.length - 1]
-  return {
-    year: last.year,
-    precip: last.precip,
-    meanPrecip: +meanP.toFixed(2),
-    precipPct: +(((last.precip - meanP) / meanP) * 100).toFixed(1),
-    temp: last.temp,
-    meanTemp: +meanT.toFixed(2),
-    tempDiff: +(last.temp - meanT).toFixed(2),
-    baseYears: base.length,
-  }
+const TABS = [
+  { id: 'dashboard', icon: '🏠' },
+  { id: 'climate', icon: '🌡️' },
+  { id: 'agronomy', icon: '🌾' },
+  { id: 'automation', icon: '⚙️' },
+  { id: 'tasks', icon: '✅' },
+]
+const LANGS = [
+  { id: 'en', label: 'EN' },
+  { id: 'ru', label: 'RU' },
+  { id: 'kz', label: 'KZ' },
+]
+const DEFAULT_PROFILE = {
+  name: '',
+  lat: '54.8700', // Petropavlovsk
+  lon: '69.1500',
+  soil: 'unknown',
+  prevCrop: 'unknown',
+  plannedCrop: 'unknown',
+  noTill: 'unknown',
 }
 
 function readLS(key, fallback) {
@@ -79,268 +50,224 @@ function writeLS(key, value) {
   }
 }
 
-const signed = (n) => (n > 0 ? '+' + n : String(n))
-
-function SeasonStats({ an, data }) {
-  const rules = readLS('agro_rules', null)
-  const tasks = readLS('agro_tasks', [])
-  const log = readLS('agro_log', [])
-
-  const dryRule = rules ? rules.find((r) => r.id === 'dry-season') : null
-  const hotRule = rules ? rules.find((r) => r.id === 'hot-season') : null
-  const dryThreshold = dryRule ? Number(dryRule.threshold) : -15
-  const hotThreshold = hotRule ? Number(hotRule.threshold) : 1.5
-
-  const activeRules = rules ? rules.filter((r) => r.enabled).length : 2
-  const totalRules = rules ? rules.length : 2
-  const pending = tasks.filter((t) => t.status === 'pending').length
-  const testChecks = log.filter((l) => l.test === true || l.result.includes('[TEST scenario]')).length
-  const realChecks = log.length - testChecks
-
-  const dry = an.precipPct <= dryThreshold
-  const hot = an.tempDiff >= hotThreshold
-
-  return (
-    <div className="card">
-      <h2>2. Season overview ({an.year})</h2>
-      <div className="grid">
-        <div className="stat">
-          <div className="label">Precipitation vs normal</div>
-          <div className="value">{signed(an.precipPct)}%</div>
-          <span className={dry ? 'badge warn' : 'badge ok'}>
-            {dry ? 'Below dry threshold' : 'Not below dry threshold'}
-          </span>
-        </div>
-        <div className="stat">
-          <div className="label">Temperature vs normal</div>
-          <div className="value">{signed(an.tempDiff)} °C</div>
-          <span className={hot ? 'badge warn' : 'badge ok'}>
-            {hot ? 'Above heat threshold' : 'Not above heat threshold'}
-          </span>
-        </div>
-        <div className="stat">
-          <div className="label">Active rules</div>
-          <div className="value">{activeRules} of {totalRules}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Pending tasks</div>
-          <div className="value">{pending}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Rule checks (real / test)</div>
-          <div className="value">{realChecks} / {testChecks}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Last NASA retrieval</div>
-          <div className="value" style={{ fontSize: 16 }}>
-            {new Date(data.retrievedAt).toLocaleString()}
-          </div>
-        </div>
-      </div>
-      <p className="muted">
-        Data: {data.source}. These are satellite and model estimates for the grid cell around your
-        point, compared with the {an.baseYears}-year mean (1991-2020). Thresholds are our
-        assumptions and can be changed in the Automation tab.
-      </p>
-    </div>
-  )
+function loadProfile() {
+  const saved = readLS('agro2_profile', null)
+  if (saved) return { ...DEFAULT_PROFILE, ...saved }
+  return {
+    ...DEFAULT_PROFILE,
+    lat: readLS('agro_lat', '') || DEFAULT_PROFILE.lat,
+    lon: readLS('agro_lon', '') || DEFAULT_PROFILE.lon,
+  }
 }
 
-function NoData() {
-  return (
+function loadRules() {
+  const saved = readLS('agro2_rules', [])
+  return DEFAULT_RULES.map((d) => {
+    const s = saved.find((x) => x.id === d.id)
+    return s ? { ...d, enabled: s.enabled, threshold: s.threshold } : d
+  })
+}
+
+function Shell() {
+  const { t, lang, setLang } = useT()
+  const [tab, setTab] = useState('dashboard')
+  const [profile, setProfile] = useState(loadProfile)
+  const [data, setData] = useState(() => readLS('agro_data', null))
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [rules, setRules] = useState(loadRules)
+  const [weights, setWeights] = useState(() => readLS('agro2_weights', DEFAULT_WEIGHTS))
+  const [tasks, setTasks] = useState(() => readLS('agro2_tasks', []))
+  const [notes, setNotes] = useState(() => readLS('agro2_notes', []))
+  const [executions, setExecutions] = useState(() => readLS('agro2_execs', []))
+  const autoLoaded = useRef(false)
+
+  useEffect(() => { writeLS('agro2_profile', profile) }, [profile])
+  useEffect(() => { if (data) writeLS('agro_data', data) }, [data])
+  useEffect(() => { writeLS('agro2_rules', rules) }, [rules])
+  useEffect(() => { writeLS('agro2_weights', weights) }, [weights])
+  useEffect(() => { writeLS('agro2_tasks', tasks) }, [tasks])
+  useEffect(() => { writeLS('agro2_notes', notes) }, [notes])
+  useEffect(() => { writeLS('agro2_execs', executions) }, [executions])
+  useEffect(() => { document.documentElement.lang = lang === 'kz' ? 'kk' : lang }, [lang])
+
+  const valid =
+    profile.lat !== '' &&
+    profile.lon !== '' &&
+    !isNaN(Number(profile.lat)) &&
+    !isNaN(Number(profile.lon)) &&
+    Math.abs(Number(profile.lat)) <= 90 &&
+    Math.abs(Number(profile.lon)) <= 180
+
+  const load = async () => {
+    if (!valid) {
+      setError({ key: 'err.coords' })
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const d = await fetchClimate(Number(profile.lat).toFixed(4), Number(profile.lon).toFixed(4), 1991, REQUEST_END_YEAR)
+      setData(d)
+    } catch (e) {
+      setError({ key: 'err.nasa', params: { msg: e.message } })
+    }
+    setLoading(false)
+  }
+
+  // First visit: load NASA data automatically if none is saved
+  useEffect(() => {
+    if (autoLoaded.current) return
+    autoLoaded.current = true
+    if (!data && valid) load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const summary = data ? seasonSummary(data.rows) : []
+  const an = data ? anomaly(summary) : null
+  const check = data ? dataCheck(data.rows, summary) : null
+  const noTill = profile.noTill === 'yes'
+  const analysis = currentAnalysis({ an, rules, weights, noTill })
+  const mismatch =
+    !!data &&
+    data.lat !== undefined &&
+    valid &&
+    (Math.abs(data.lat - Number(profile.lat)) > 0.0001 || Math.abs(data.lon - Number(profile.lon)) > 0.0001)
+  const fieldKey = `${profile.lat},${profile.lon}`
+
+  const runNow = (test) => {
+    try {
+      if (!test && !an) throw new Error(t('err.noData'))
+      const res = runAutomation({
+        rules,
+        an,
+        weights,
+        noTill,
+        test,
+        existingKeys: tasks.map((x) => x.key),
+        fieldKey,
+        retrievedAt: data ? data.retrievedAt : null,
+      })
+      setTasks([...res.tasks, ...tasks])
+      setNotes([...res.notifications, ...notes])
+      setExecutions([res.execution, ...executions].slice(0, 50))
+    } catch (e) {
+      const failed = {
+        id: 'ex-' + Date.now().toString(36),
+        at: new Date().toISOString(),
+        trigger: 'manual',
+        test,
+        status: 'failed',
+        field: fieldKey,
+        inputs: null,
+        ruleResults: [],
+        assumptions: { weights, noTill, adjustments: {} },
+        ranking: { before: [], after: [], changes: [] },
+        taskIds: [],
+        notificationIds: [],
+        error: e.message,
+      }
+      setExecutions([failed, ...executions].slice(0, 50))
+    }
+  }
+
+  const clearHistory = () => {
+    setTasks([])
+    setNotes([])
+    setExecutions([])
+  }
+
+  const setTaskStatus = (id, status) => setTasks(tasks.map((x) => (x.id === id ? { ...x, status } : x)))
+
+  const loadPrompt = (
     <div className="card">
-      <p>
-        Load NASA data first: open the Dashboard tab, choose your field and press
-        "Load NASA POWER data".
-      </p>
+      <p>{loading ? t('common.loading') : t('dash.noData')}</p>
+      {error && <p className="error">{t(error.key, error.params)}</p>}
+      <button onClick={load} disabled={!valid || loading}>{t('field.load')}</button>
+    </div>
+  )
+
+  return (
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <h1>AgroShield AI</h1>
+          <p>{t('app.tagline')}</p>
+        </div>
+        <div className="langs" aria-label={t('lang.label')}>
+          {LANGS.map((l) => (
+            <button key={l.id} className={l.id === lang ? 'active' : ''} onClick={() => setLang(l.id)}>
+              {l.label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <nav className="tabs">
+        {TABS.map((x) => (
+          <button key={x.id} className={x.id === tab ? 'active' : ''} onClick={() => setTab(x.id)}>
+            {x.icon} {t('nav.' + x.id)}
+          </button>
+        ))}
+      </nav>
+
+      {tab === 'dashboard' && (
+        <>
+          <Dashboard
+            profile={profile}
+            an={an}
+            data={data}
+            analysis={analysis}
+            rules={rules}
+            tasks={tasks}
+            notes={notes}
+            executions={executions}
+            mismatch={mismatch}
+            onGoto={setTab}
+            onReload={load}
+          />
+          <FieldProfile
+            profile={profile}
+            setProfile={setProfile}
+            valid={valid}
+            loading={loading}
+            error={error}
+            setError={setError}
+            onLoad={load}
+          />
+        </>
+      )}
+
+      {tab === 'climate' &&
+        (data ? <Climate summary={summary} an={an} data={data} check={check} rules={rules} profile={profile} /> : loadPrompt)}
+
+      {tab === 'agronomy' && (
+        <Agronomy analysis={analysis} weights={weights} setWeights={setWeights} profile={profile} hasClimate={!!an} />
+      )}
+
+      {tab === 'automation' && (
+        <Automation
+          rules={rules}
+          setRules={setRules}
+          an={an}
+          hasData={!!data}
+          executions={executions}
+          onRun={runNow}
+          onClear={clearHistory}
+        />
+      )}
+
+      {tab === 'tasks' && <TasksNotifications tasks={tasks} notes={notes} setTaskStatus={setTaskStatus} />}
+
+      <div className="footer">{t('app.footer')}</div>
     </div>
   )
 }
 
 export default function App() {
-  const [tab, setTab] = useState('Dashboard')
-  const [lat, setLat] = useState(() => readLS('agro_lat', ''))
-  const [lon, setLon] = useState(() => readLS('agro_lon', ''))
-  const [data, setData] = useState(() => readLS('agro_data', null))
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => { writeLS('agro_lat', lat) }, [lat])
-  useEffect(() => { writeLS('agro_lon', lon) }, [lon])
-  useEffect(() => { if (data) writeLS('agro_data', data) }, [data])
-
-  const valid =
-    lat !== '' &&
-    lon !== '' &&
-    !isNaN(Number(lat)) &&
-    !isNaN(Number(lon)) &&
-    Math.abs(Number(lat)) <= 90 &&
-    Math.abs(Number(lon)) <= 180
-
-  const pick = (la, lo) => {
-    setLat(la.toFixed(4))
-    setLon(lo.toFixed(4))
-  }
-
-  const useMyLocation = () => {
-    if (!navigator.geolocation) {
-      setError('Geolocation is not available in this browser')
-      return
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => pick(pos.coords.latitude, pos.coords.longitude),
-      () => setError('Could not get your location. Enter coordinates manually.')
-    )
-  }
-
-  const load = async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const d = await fetchClimate(Number(lat).toFixed(4), Number(lon).toFixed(4), 1991, 2026)
-      setData(d)
-    } catch (e) {
-      setError(e.message)
-    }
-    setLoading(false)
-  }
-
-  const summary = data ? seasonSummary(data.rows) : []
-  const an = data ? anomaly(summary) : null
-
   return (
-    <div className="app">
-      <header className="header">
-        <h1>AgroShield AI</h1>
-        <p>Climate-based crop rotation decision support using NASA POWER data</p>
-      </header>
-
-      <nav className="tabs">
-        {TABS.map((t) => (
-          <button key={t} className={t === tab ? 'active' : ''} onClick={() => setTab(t)}>
-            {t}
-          </button>
-        ))}
-      </nav>
-
-      {tab === 'Dashboard' && (
-        <>
-          <div className="card">
-            <h2>1. Choose your field</h2>
-            <p className="muted">Click the map or enter GPS coordinates, then load NASA climate data.</p>
-
-            <MapContainer center={[54.87, 69.15]} zoom={6} style={{ height: 340 }}>
-              <TileLayer
-                attribution="&copy; OpenStreetMap contributors"
-                url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-              />
-              <ClickHandler onPick={pick} />
-              {valid && <CircleMarker center={[Number(lat), Number(lon)]} radius={8} />}
-            </MapContainer>
-
-            <div className="row">
-              <label>
-                Latitude{' '}
-                <input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="54.8700" style={{ width: 110 }} />
-              </label>
-              <label>
-                Longitude{' '}
-                <input value={lon} onChange={(e) => setLon(e.target.value)} placeholder="69.1500" style={{ width: 110 }} />
-              </label>
-              <button onClick={useMyLocation}>Use my location</button>
-              <button onClick={load} disabled={!valid || loading}>
-                {loading ? 'Loading...' : 'Load NASA POWER data'}
-              </button>
-            </div>
-            {error && <p className="error">{error}</p>}
-            {data && (
-              <p className="muted">
-                Saved data in this browser was loaded at {new Date(data.retrievedAt).toLocaleString()}.
-                Press "Load NASA POWER data" to refresh it.
-              </p>
-            )}
-          </div>
-
-          {data && an && <SeasonStats an={an} data={data} />}
-          {data && !an && (
-            <div className="card">
-              <p>Not enough complete years to compute the anomaly.</p>
-            </div>
-          )}
-        </>
-      )}
-
-      {tab === 'Climate' &&
-        (data ? (
-          <div className="card">
-            <h2>Climate intelligence</h2>
-            <h3>May-August averages by year (assumed growing season)</h3>
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={summary}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="year" />
-                <YAxis yAxisId="left" />
-                <YAxis yAxisId="right" orientation="right" />
-                <Tooltip />
-                <Legend />
-                <Line yAxisId="left" type="monotone" dataKey="temp" name="Temperature (°C)" stroke="#d9480f" dot={false} />
-                <Line yAxisId="right" type="monotone" dataKey="precip" name="Precipitation (mm/day)" stroke="#1971c2" dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-
-            {an ? (
-              <div style={{ background: '#f1f3f5', padding: 12, borderRadius: 8, marginTop: 12 }}>
-                <b>Season {an.year} vs normal ({BASE_START}-{BASE_END}, {an.baseYears} years)</b>
-                <p>
-                  Precipitation: {an.precip} mm/day (about {(an.precip * SEASON_DAYS).toFixed(0)} mm over the season)
-                  vs normal {an.meanPrecip} mm/day:{' '}
-                  <b>{an.precipPct > 0 ? '+' : ''}{an.precipPct}%</b>
-                </p>
-                <p>
-                  Temperature: {an.temp} °C vs normal {an.meanTemp} °C:{' '}
-                  <b>{an.tempDiff > 0 ? '+' : ''}{an.tempDiff} °C</b>
-                </p>
-                <small>
-                  Simple anomaly = (season value - mean of baseline years) / mean. This describes the
-                  climate of the NASA grid cell around your point, not your exact field.
-                </small>
-              </div>
-            ) : (
-              <p>Not enough data to compute the anomaly.</p>
-            )}
-
-            <RiskProfile summary={summary} />
-
-            <p className="muted">
-              Source: {data.source}. Retrieved: {data.retrievedAt}
-            </p>
-          </div>
-        ) : (
-          <NoData />
-        ))}
-
-      {tab === 'Agronomy' &&
-        (data ? (
-          <div className="card">
-            <Recommendations an={an} />
-          </div>
-        ) : (
-          <NoData />
-        ))}
-
-      {tab === 'Automation' && (
-        <div className="card">
-          <Automation
-            an={an}
-            fieldKey={`${lat},${lon}`}
-            source={data ? `NASA POWER, retrieved ${data.retrievedAt}` : ''}
-          />
-        </div>
-      )}
-
-      <div className="footer">
-        AgroShield AI is a decision-support prototype, not a yield forecast. Data: NASA POWER.
-      </div>
-    </div>
+    <LangProvider>
+      <Shell />
+    </LangProvider>
   )
 }

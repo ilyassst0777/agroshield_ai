@@ -1,95 +1,109 @@
-export const METRICS = {
-  precipPct: { label: 'Precipitation vs normal (%)' },
-  tempDiff: { label: 'Temperature vs normal (°C)' },
-}
+import { rank, adjustmentsFrom, compareRankings, minimal } from './scoring.js'
 
-// Thresholds are our assumptions, not values from the sources
+// Thresholds are our assumptions, not values from the sources.
 export const DEFAULT_RULES = [
-  {
-    id: 'dry-season',
-    name: 'Dry season',
-    enabled: true,
-    metric: 'precipPct',
-    op: '<=',
-    threshold: -15,
-    taskTitle: 'Review water-saving rotation options',
-    taskText:
-      'Last season was drier than normal. Check the rotation options and think about water conservation before planning the next season.',
-  },
-  {
-    id: 'hot-season',
-    name: 'Hot season',
-    enabled: true,
-    metric: 'tempDiff',
-    op: '>=',
-    threshold: 1.5,
-    taskTitle: 'Review heat and moisture risk',
-    taskText:
-      'Last season was warmer than normal. Check soil moisture reserves and the rotation options.',
-  },
+  { id: 'dry-season', enabled: true, metric: 'precipPct', op: '<=', threshold: -15, priority: 'high' },
+  { id: 'hot-season', enabled: true, metric: 'tempDiff', op: '>=', threshold: 1.5, priority: 'medium' },
 ]
 
-function check(value, op, threshold) {
-  return op === '<=' ? value <= threshold : value >= threshold
-}
+export const SIMULATED = { precipPct: -30, tempDiff: 2.5 }
 
-// No side effects: returns what should be added. existingKeys prevents duplicate tasks.
-export function runRules({ rules, anomaly, fieldKey, source, test, existingKeys }) {
+const meets = (value, op, threshold) => (op === '<=' ? value <= threshold : value >= threshold)
+const uid = () => 'ex-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+
+// TRIGGER (manual) -> CONDITION (threshold) -> ACTION (re-rank, task, notification) -> RESULT (execution record)
+export function runAutomation({ rules, an, weights, noTill, test, existingKeys, fieldKey, retrievedAt }) {
   const now = new Date().toISOString()
+  const input = test
+    ? { year: an ? an.year : 'demo', precipPct: SIMULATED.precipPct, tempDiff: SIMULATED.tempDiff }
+    : { year: an.year, precipPct: an.precipPct, tempDiff: an.tempDiff }
+  const mode = test ? 'test' : 'real'
+  const execId = uid()
+  const before = rank({ weights, noTill })
+  const ruleResults = []
   const tasks = []
   const notifications = []
-  const log = []
-  const data = test ? { ...anomaly, precipPct: -30, tempDiff: 2.5 } : anomaly
-  const tag = test ? ' [TEST scenario]' : ''
+  const firedIds = []
 
   for (const rule of rules) {
-    if (!rule.enabled) {
-      log.push({ at: now, rule: rule.name, result: 'skipped: rule disabled' + tag })
-      continue
-    }
-    const value = data[rule.metric]
+    const value = input[rule.metric]
     const threshold = Number(rule.threshold)
-    if (!check(value, rule.op, threshold)) {
-      log.push({
-        at: now,
-        rule: rule.name,
-        result: `condition not met (value ${value}, threshold ${rule.op} ${threshold})` + tag,
-      })
+    const base = { ruleId: rule.id, metric: rule.metric, op: rule.op, value, threshold }
+
+    if (!rule.enabled) {
+      ruleResults.push({ ...base, status: 'disabled' })
       continue
     }
-    const key = `${rule.id}|${fieldKey}|${data.year}|${test ? 'test' : 'real'}`
+    if (!meets(value, rule.op, threshold)) {
+      ruleResults.push({ ...base, status: 'not_met' })
+      continue
+    }
+
+    firedIds.push(rule.id)
+    const key = `${rule.id}|${fieldKey}|${input.year}|${mode}`
     if (existingKeys.includes(key)) {
-      log.push({
-        at: now,
-        rule: rule.name,
-        result: 'skipped: task for this rule, field and season already exists' + tag,
-      })
+      ruleResults.push({ ...base, status: 'duplicate' })
       continue
     }
+
+    const adjust = adjustmentsFrom([rule.id])
+    const after = rank({ weights, noTill, adjust })
+    const cmp = compareRankings(before, after)
+
+    ruleResults.push({ ...base, status: 'met' })
     tasks.push({
       id: key,
       key,
-      title: rule.taskTitle,
-      text: rule.taskText,
+      kind: rule.id,
+      priority: rule.priority,
       status: 'pending',
       test,
       createdAt: now,
-      ruleName: rule.name,
+      execId,
+      payload: {
+        year: input.year,
+        value,
+        op: rule.op,
+        threshold,
+        metric: rule.metric,
+        changes: cmp.changes,
+        adjusted: Object.keys(adjust).length > 0,
+      },
     })
     notifications.push({
       id: 'n|' + key,
-      createdAt: now,
+      key,
+      kind: rule.id,
       test,
-      message: `${rule.name}: ${METRICS[rule.metric].label} = ${value}, condition ${rule.op} ${threshold}.`,
+      simulated: test,
+      createdAt: now,
+      execId,
       field: fieldKey,
-      source,
-      nextStep: 'Open the task below and approve or reject it.',
-    })
-    log.push({
-      at: now,
-      rule: rule.name,
-      result: `condition met (value ${value}); task created, waiting for farmer approval` + tag,
+      retrievedAt: test ? null : retrievedAt,
+      payload: { metric: rule.metric, value, op: rule.op, threshold },
     })
   }
-  return { tasks, notifications, log }
+
+  const overall = adjustmentsFrom(firedIds)
+  const afterAll = rank({ weights, noTill, adjust: overall })
+  const cmpAll = compareRankings(before, afterAll)
+  const anyMet = ruleResults.some((r) => r.status === 'met')
+  const anyDup = ruleResults.some((r) => r.status === 'duplicate')
+
+  const execution = {
+    id: execId,
+    at: now,
+    trigger: 'manual',
+    test,
+    status: anyMet ? 'completed' : anyDup ? 'skipped_duplicates' : 'no_condition_met',
+    field: fieldKey,
+    inputs: input,
+    ruleResults,
+    assumptions: { weights, noTill, adjustments: overall },
+    ranking: { before: minimal(before), after: minimal(afterAll), changes: cmpAll.changes },
+    taskIds: tasks.map((x) => x.id),
+    notificationIds: notifications.map((x) => x.id),
+    error: null,
+  }
+  return { execution, tasks, notifications }
 }
