@@ -1,7 +1,11 @@
 import { useT } from './i18n.jsx'
+import { tr } from './extraText.js'
 import { fmtTime, opSym, ruleLine, signed } from './ui.jsx'
+import TaskCard from './TaskCard.jsx'
 
-export default function Automation({ rules, setRules, an, hasData, executions, onRun, onClear }) {
+export default function Automation({
+  rules, setRules, an, hasData, executions, tasks, setTaskStatus, onRun, onClear,
+}) {
   const { t, lang } = useT()
 
   const updateRule = (id, patch) => setRules(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)))
@@ -20,6 +24,10 @@ export default function Automation({ rules, setRules, an, hasData, executions, o
           <div className="value">{rules.filter((r) => r.enabled).length} / {rules.length}</div>
         </div>
         <div className="stat">
+          <div className="label">{t('auto.pending')}</div>
+          <div className="value">{tasks.filter((x) => x.status === 'pending').length}</div>
+        </div>
+        <div className="stat">
           <div className="label">{t('auto.checks')}</div>
           <div className="value">{realRuns} / {testRuns}</div>
         </div>
@@ -32,12 +40,13 @@ export default function Automation({ rules, setRules, an, hasData, executions, o
 
       <h3>{t('auto.rules')}</h3>
       {rules.map((r) => {
+        const isRank = r.type === 'ranking'
         const lastExec = executions.find((e) => e.ruleResults.some((x) => x.ruleId === r.id))
         const lastRes = lastExec ? lastExec.ruleResults.find((x) => x.ruleId === r.id) : null
         return (
           <div key={r.id} className="rule-card">
             <div className="row" style={{ margin: 0 }}>
-              <b>{t('rule.' + r.id + '.name')}</b>
+              <b>{tr(t, 'rule.' + r.id + '.name')}</b>
               <span className={r.enabled ? 'badge ok' : 'badge warn'}>
                 {r.enabled ? t('auto.enabled') : t('auto.disabled')}
               </span>
@@ -46,23 +55,31 @@ export default function Automation({ rules, setRules, an, hasData, executions, o
                 {t('auto.enable')}
               </label>
             </div>
-            <div className="muted">{t('rule.' + r.id + '.desc')}</div>
+            <div className="muted">{tr(t, 'rule.' + r.id + '.desc')}</div>
             <div>{t('auto.trigger')}</div>
-            <div>
-              <b>{t('auto.condition')}:</b> {t('metric.' + r.metric)} {opSym(r.op)}{' '}
-              <input
-                type="number"
-                step="0.1"
-                value={r.threshold}
-                onChange={(e) => updateRule(r.id, { threshold: e.target.value })}
-                style={{ width: 80 }}
-              />{' '}
-              <small className="muted">{t('auto.assumption')}</small>
-            </div>
+            {isRank ? (
+              <div>
+                <b>{t('auto.condition')}:</b> {tr(t, 'rule.rotation-analysis.cond')}
+              </div>
+            ) : (
+              <div>
+                <b>{t('auto.condition')}:</b> {t('metric.' + r.metric)} {opSym(r.op)}{' '}
+                <input
+                  type="number"
+                  step="0.1"
+                  value={r.threshold}
+                  onChange={(e) => updateRule(r.id, { threshold: e.target.value })}
+                  style={{ width: 80 }}
+                />{' '}
+                <small className="muted">{t('auto.assumption')}</small>
+              </div>
+            )}
             <div>{t('auto.action')}</div>
             <div className="muted">
               <b>{t('auto.last')}:</b>{' '}
-              {lastExec && lastRes ? `${fmtTime(lastExec.at, lang)} ${lastExec.test ? '[' + t('common.test') + '] ' : ''}— ${ruleLine(t, lastRes)}` : t('auto.never')}
+              {lastExec && lastRes
+                ? `${fmtTime(lastExec.at, lang)} ${lastExec.test ? '[' + t('common.test') + '] ' : ''}— ${ruleLine(t, lastRes)}`
+                : t('auto.never')}
             </div>
           </div>
         )
@@ -74,6 +91,13 @@ export default function Automation({ rules, setRules, an, hasData, executions, o
         <button className="danger" onClick={onClear}>{t('auto.clear')}</button>
       </div>
       <small className="muted">{t('auto.testNote')}</small>
+
+      <h3>{tr(t, 'auto.tasks')}</h3>
+      {tasks.length === 0 && <p className="muted">{t('tasks.none')}</p>}
+      {tasks.map((task) => (
+        <TaskCard key={task.id} task={task} setTaskStatus={setTaskStatus} />
+      ))}
+      <p className="muted">{t('tasks.safety')}</p>
 
       <h3>{t('auto.history')}</h3>
       {executions.length === 0 && <p className="muted">{t('auto.noHistory')}</p>}

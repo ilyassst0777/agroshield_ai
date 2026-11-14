@@ -4,6 +4,7 @@ import { rank, adjustmentsFrom, compareRankings, minimal } from './scoring.js'
 export const DEFAULT_RULES = [
   { id: 'dry-season', enabled: true, metric: 'precipPct', op: '<=', threshold: -15, priority: 'high' },
   { id: 'hot-season', enabled: true, metric: 'tempDiff', op: '>=', threshold: 1.5, priority: 'medium' },
+  { id: 'rotation-analysis', type: 'ranking', enabled: true, priority: 'medium' },
 ]
 
 export const SIMULATED = { precipPct: -30, tempDiff: 2.5 }
@@ -11,8 +12,9 @@ export const SIMULATED = { precipPct: -30, tempDiff: 2.5 }
 const meets = (value, op, threshold) => (op === '<=' ? value <= threshold : value >= threshold)
 const uid = () => 'ex-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
 
-// TRIGGER (manual) -> CONDITION (threshold) -> ACTION (re-rank, task, notification) -> RESULT (execution record)
-export function runAutomation({ rules, an, weights, noTill, test, existingKeys, fieldKey, retrievedAt }) {
+// TRIGGER (manual) -> CONDITION (threshold / ranking change) -> ACTION (re-rank, task, notification) -> RESULT (execution record)
+// previous = ranking.after of the previous execution of the same mode (or null)
+export function runAutomation({ rules, an, weights, noTill, test, existingKeys, fieldKey, retrievedAt, previous }) {
   const now = new Date().toISOString()
   const input = test
     ? { year: an ? an.year : 'demo', precipPct: SIMULATED.precipPct, tempDiff: SIMULATED.tempDiff }
@@ -26,6 +28,8 @@ export function runAutomation({ rules, an, weights, noTill, test, existingKeys, 
   const firedIds = []
 
   for (const rule of rules) {
+    if (rule.type === 'ranking') continue
+
     const value = input[rule.metric]
     const threshold = Number(rule.threshold)
     const base = { ruleId: rule.id, metric: rule.metric, op: rule.op, value, threshold }
@@ -84,9 +88,60 @@ export function runAutomation({ rules, an, weights, noTill, test, existingKeys, 
     })
   }
 
+  // Ranking with all fired climate rules applied together
   const overall = adjustmentsFrom(firedIds)
   const afterAll = rank({ weights, noTill, adjust: overall })
   const cmpAll = compareRankings(before, afterAll)
+
+  // Rule 3: crop rotation analysis (compare with the previous analysis)
+  const rankRule = rules.find((r) => r.type === 'ranking')
+  if (rankRule) {
+    const rb = { ruleId: rankRule.id, metric: 'rank', op: null, value: null, threshold: null }
+    const topNew = afterAll[0].id
+    if (!rankRule.enabled) {
+      ruleResults.push({ ...rb, status: 'disabled' })
+    } else if (!previous || previous.length === 0) {
+      ruleResults.push({ ...rb, status: 'baseline', detail: { to: topNew } })
+    } else {
+      const prevTop = previous.find((x) => x.position === 1)
+      const cmpPrev = compareRankings(previous, afterAll)
+      if (prevTop && prevTop.id !== topNew) {
+        const key = `${rankRule.id}|${fieldKey}|${prevTop.id}->${topNew}|${mode}`
+        const detail = { from: prevTop.id, to: topNew }
+        if (existingKeys.includes(key)) {
+          ruleResults.push({ ...rb, status: 'duplicate', detail })
+        } else {
+          ruleResults.push({ ...rb, status: 'met', detail })
+          tasks.push({
+            id: key,
+            key,
+            kind: rankRule.id,
+            priority: rankRule.priority,
+            status: 'pending',
+            test,
+            createdAt: now,
+            execId,
+            payload: { year: input.year, from: prevTop.id, to: topNew, changes: cmpPrev.changes },
+          })
+          notifications.push({
+            id: 'n|' + key,
+            key,
+            kind: rankRule.id,
+            test,
+            simulated: test,
+            createdAt: now,
+            execId,
+            field: fieldKey,
+            retrievedAt: test ? null : retrievedAt,
+            payload: { from: prevTop.id, to: topNew },
+          })
+        }
+      } else {
+        ruleResults.push({ ...rb, status: 'not_met', detail: { to: topNew, changes: cmpPrev.changes } })
+      }
+    }
+  }
+
   const anyMet = ruleResults.some((r) => r.status === 'met')
   const anyDup = ruleResults.some((r) => r.status === 'duplicate')
 

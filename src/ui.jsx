@@ -1,5 +1,6 @@
 import { SOURCES } from './rotations.js'
 import { useT } from './i18n.jsx'
+import { tr } from './extraText.js'
 
 export function SourceLinks({ ids }) {
   return ids.map((id) => (
@@ -39,6 +40,20 @@ export function describeTask(t, task) {
   const list = (p.changes || [])
     .map((c) => t('task.change', { name: t('rot.' + c.id), from: c.from, to: c.to }))
     .join('; ')
+  const analysis = (p.changes || []).length
+    ? t('task.analysis.changed', { list })
+    : t('task.analysis.same')
+
+  if (task.kind === 'rotation-analysis') {
+    return {
+      title: tr(t, 'task.title.rotation-analysis'),
+      body: tr(t, 'task.body.rotation-analysis', { from: t('rot.' + p.from), to: t('rot.' + p.to) }),
+      analysis,
+      reason: tr(t, 'task.reason.rotation-analysis'),
+      next: t('task.next'),
+    }
+  }
+
   return {
     title: t('task.title.' + task.kind),
     body: t('task.body.' + task.kind, {
@@ -47,15 +62,22 @@ export function describeTask(t, task) {
       op: opSym(p.op),
       threshold: signed(p.threshold),
     }),
-    analysis: (p.changes || []).length
-      ? t('task.analysis.changed', { list })
-      : t('task.analysis.same'),
+    analysis,
     reason: t('task.reason.' + task.kind),
     next: t('task.next'),
   }
 }
 
 export function describeNote(t, n) {
+  if (n.kind === 'rotation-analysis') {
+    return {
+      message: tr(t, 'nt.rank', {
+        rule: tr(t, 'rule.rotation-analysis.name'),
+        from: t('rot.' + n.payload.from),
+        to: t('rot.' + n.payload.to),
+      }),
+    }
+  }
   return {
     message: t('nt.msg', {
       rule: t('rule.' + n.kind + '.name'),
@@ -68,9 +90,20 @@ export function describeNote(t, n) {
 }
 
 export function ruleLine(t, rr) {
+  const name = tr(t, 'rule.' + rr.ruleId + '.name')
+
+  if (rr.ruleId === 'rotation-analysis') {
+    const d = rr.detail || {}
+    if (rr.status === 'disabled') return t('hist.disabled', { rule: name })
+    if (rr.status === 'baseline') return tr(t, 'hist.baseline', { rule: name })
+    if (rr.status === 'met') return tr(t, 'hist.rankChanged', { rule: name, from: t('rot.' + d.from), to: t('rot.' + d.to) })
+    if (rr.status === 'duplicate') return tr(t, 'hist.rankDuplicate', { rule: name })
+    return tr(t, 'hist.rankSame', { rule: name, name: t('rot.' + d.to) })
+  }
+
   const key = { met: 'hist.met', not_met: 'hist.notMet', disabled: 'hist.disabled', duplicate: 'hist.duplicate' }[rr.status]
   return t(key, {
-    rule: t('rule.' + rr.ruleId + '.name'),
+    rule: name,
     metric: t('metric.' + rr.metric),
     value: signed(rr.value),
     op: opSym(rr.op),

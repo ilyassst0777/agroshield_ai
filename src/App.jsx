@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { LangProvider, useT } from './i18n.jsx'
+import { setExtraLang } from './extraText.js'
 import { fetchClimate } from './nasa.js'
 import { seasonSummary, anomaly, dataCheck, REQUEST_END_YEAR } from './climate.js'
 import { DEFAULT_WEIGHTS, currentAnalysis } from './scoring.js'
@@ -64,12 +65,15 @@ function loadRules() {
   const saved = readLS('agro2_rules', [])
   return DEFAULT_RULES.map((d) => {
     const s = saved.find((x) => x.id === d.id)
-    return s ? { ...d, enabled: s.enabled, threshold: s.threshold } : d
+    if (!s) return d
+    return d.type === 'ranking' ? { ...d, enabled: s.enabled } : { ...d, enabled: s.enabled, threshold: s.threshold }
   })
 }
 
 function Shell() {
   const { t, lang, setLang } = useT()
+  setExtraLang(lang)
+
   const [tab, setTab] = useState('dashboard')
   const [profile, setProfile] = useState(loadProfile)
   const [data, setData] = useState(() => readLS('agro_data', null))
@@ -134,10 +138,14 @@ function Shell() {
     valid &&
     (Math.abs(data.lat - Number(profile.lat)) > 0.0001 || Math.abs(data.lon - Number(profile.lon)) > 0.0001)
   const fieldKey = `${profile.lat},${profile.lon}`
+  const lastExec = executions.find((e) => e.status !== 'failed') || null
 
   const runNow = (test) => {
     try {
       if (!test && !an) throw new Error(t('err.noData'))
+      const prev = executions.find(
+        (e) => e.test === test && e.status !== 'failed' && e.ranking && e.ranking.after && e.ranking.after.length
+      )
       const res = runAutomation({
         rules,
         an,
@@ -147,6 +155,7 @@ function Shell() {
         existingKeys: tasks.map((x) => x.key),
         fieldKey,
         retrievedAt: data ? data.retrievedAt : null,
+        previous: prev ? prev.ranking.after : null,
       })
       setTasks([...res.tasks, ...tasks])
       setNotes([...res.notifications, ...notes])
@@ -242,7 +251,14 @@ function Shell() {
         (data ? <Climate summary={summary} an={an} data={data} check={check} rules={rules} profile={profile} /> : loadPrompt)}
 
       {tab === 'agronomy' && (
-        <Agronomy analysis={analysis} weights={weights} setWeights={setWeights} profile={profile} hasClimate={!!an} />
+        <Agronomy
+          analysis={analysis}
+          weights={weights}
+          setWeights={setWeights}
+          profile={profile}
+          hasClimate={!!an}
+          lastExec={lastExec}
+        />
       )}
 
       {tab === 'automation' && (
@@ -252,6 +268,8 @@ function Shell() {
           an={an}
           hasData={!!data}
           executions={executions}
+          tasks={tasks}
+          setTaskStatus={setTaskStatus}
           onRun={runNow}
           onClear={clearHistory}
         />
